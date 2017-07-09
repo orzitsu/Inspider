@@ -1,6 +1,10 @@
 # Inspider
 A Web Spider/Crawler for Instagram written in Python.
 
+## Changelog
+#### [1.0.1] - 2017-07-10
+- Update Inspider.py to fit the new Instagram API.
+
 ## Requirements
 #### Python 3.x
 For more details, visit [here](https://www.python.org/downloads/).
