@@ -85,7 +85,7 @@ class Instagram:
     def analyze_html(self, html):
         soup = bs4.BeautifulSoup(html, "html.parser")
         temp = soup.find_all('script', {'type': 'text/javascript'})
-        entry_data = temp[-4].text.replace('window._sharedData = ', '')
+        entry_data = temp[-3].text.replace('window._sharedData = ', '')
         entry_data = entry_data.rstrip(';')
         data = json.loads(entry_data)
         return data
@@ -137,7 +137,7 @@ class Instagram:
             self.set_cookie_from_html(html=html)
             self.csrf = self.cookie['csrftoken']
 
-    def query_media_after(self, content, end_cursor, username='', hashtag='', qry_type='ig_user', per=12):
+    def query_media_after(self, end_cursor, username='', user_id='', hashtag='', qry_type='ig_user', per=12):
         query_header = self.default_headers
         query_header['X-CSRFToken'] = self.csrf
         query_header['X-Instagram-AJAX'] = '1'
@@ -145,74 +145,48 @@ class Instagram:
         query_header['X-Requested-With'] = 'XMLHttpRequest'
         if qry_type == 'ig_user':
             query_header['Referer'] = 'https://www.instagram.com/' + username
+            query_id = '17862015703145017'
+            variables = '{"id":"'+user_id+'","first":'+str(per)+',"after":"'+end_cursor+'"}'
+
         elif qry_type == 'ig_hashtag':
             url = 'https://www.instagram.com/explore/tags/'+hashtag+'/'
             query_header['Referer'] = urllib.parse.quote(url, safe=';/?:@&=+$,')
-        q = qry_type + '(' + str(content) + ') { media.after(' + str(end_cursor) + ', ' + str(per) + ') ' + '''{
-  count,
-  nodes {
-    __typename,
-    caption,
-    code,
-    comments {
-      count
-    },
-    comments_disabled,
-    date,
-    dimensions {
-      height,
-      width
-    },
-    display_src,
-    id,
-    is_video,
-    likes {
-      count
-    },
-    owner {
-      id
-    },
-    thumbnail_src,
-    video_views
-  },
-  page_info
-}
- }'''
-        ref = 'users::show'
-        query_id = '17849115430193904'
-        data = dict(q=q, ref=ref, query_id=query_id)
-        ''' Remove This Line In Case Of Content-Length Is Verified One Day##############################################
-        temp_data = urllib.parse.urlencode(data, safe='()')
-        temp_data = temp_data.encode('utf-8')
-        query_header['Content-Length'] = str(len(temp_data))
-        ##############################################Remove This Line In Case Of Content-Length Is Verified One Day '''
+            query_id = '17875800862117404'
+            variables = '{"tag_name":"'+hashtag+'","first":'+str(per)+',"after":"'+end_cursor+'"}'
+        data = dict(variables=variables, query_id=query_id)
+        print(data)
         attemps = 0
         success = False
         while attemps < 3 and not success:
             try:
-                temp = HTTPMethod('https://www.instagram.com/query/', headers=query_header, cookie=self.cookie, data=data)
-                code = temp.post()
+                temp = HTTPMethod('https://www.instagram.com/graphql/query/', headers=query_header, cookie=self.cookie, data=data)
+                code = temp.get()
                 return code
             except:
                 attemps += 1
-                print('query_media_after: ' + content + end_cursor + ' error occurred. retry(%d)' % attemps)
+                print('query_media_after: ' + end_cursor + ' error occurred. retry(%d)' % attemps)
 
     def query_follow(self, username, user_id, query_type='followers', per=10, set_end_cursor='', error_stop=True):
         headers = self.default_headers
+        headers['X-CSRFToken'] = self.csrf
+        headers['X-Instagram-AJAX'] = '1'
+        headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8'
+        headers['X-Requested-With'] = 'XMLHttpRequest'
         headers['Referer'] = 'https://www.instagram.com/'+username+'/'
         if query_type == 'followers':
-            query_id = 17851374694183129
+            query_id = '17851374694183129'
         elif query_type == 'following':
-            query_id = 17874545323001329
+            query_id = '17874545323001329'
         if set_end_cursor:
-            url = 'https://www.instagram.com/graphql/query/?query_id='+str(query_id)+'&id='+str(user_id)+'&first='+str(per)+'&after='+set_end_cursor
+            variables = '{"id":"'+user_id+'","first":'+str(per)+',"after":"'+set_end_cursor+'"}'
         else:
-            url = 'https://www.instagram.com/graphql/query/?query_id='+str(query_id)+'&id='+str(user_id)+'&first=20'
+            variables = '{"id":"'+user_id+'","first":'+str(per)+'}'
+        data = dict(variables=variables, query_id=query_id)
         attemps = 0
         success = False
         while attemps < 3 and not success:
             try:
-                temp = HTTPMethod(url=url, headers=headers, cookie=self.cookie).get()
+                temp = HTTPMethod('https://www.instagram.com/graphql/query/', headers=headers, cookie=self.cookie, data=data).get()
                 temp_data = json.loads(temp.read().decode('utf-8'))
                 if query_type == 'followers':
                     return temp_data['data']['user']['edge_followed_by']
@@ -269,7 +243,7 @@ class Instagram:
                 end_cursor = data['page_info']['end_cursor']
             while loop:
                 try:
-                    code = self.query_media_after(content=data['user']['id'], username=username, end_cursor=end_cursor, per=per)
+                    code = self.query_media_after(user_id=data['user']['id'], username=username, end_cursor=end_cursor, per=per)
                     if code:
                         times += 1
                         temp_data = json.loads(code.read().decode('utf-8'))
@@ -277,17 +251,15 @@ class Instagram:
                         if times >= page > 0:
                             loop = False
                         if stop_id:
-                            for temp in temp_data['media']['nodes']:
-                                if temp['id'] == stop_id:
+                            for temp in temp_data['data']['user']['edge_owner_to_timeline_media']['edges']:
+                                if temp['node']['id'] == stop_id:
                                     loop = False
-                        if temp_data['media']['page_info']['end_cursor'] == end_cursor or temp_data['media']['page_info']['has_next_page'] is False:
+                        if temp_data['data']['user']['edge_owner_to_timeline_media']['page_info']['end_cursor'] == end_cursor or temp_data['data']['user']['edge_owner_to_timeline_media']['page_info']['has_next_page'] is False:
                             loop = False
                         else:
-                            end_cursor = temp_data['media']['page_info']['end_cursor']
-                        if times == 1:
-                            data['nodes'] = []
-                        data['nodes'] += temp_data['media']['nodes']
-                        data['page_info'] = temp_data['media']['page_info']
+                            end_cursor = temp_data['data']['user']['edge_owner_to_timeline_media']['page_info']['end_cursor']
+                        for tmp1 in temp_data['data']['user']['edge_owner_to_timeline_media']['edges']:
+                            data['nodes'].append(tmp1['node'])
                 except:
                     data['nodes'] = data['nodes']
                     if error_stop:
@@ -305,7 +277,7 @@ class Instagram:
                 end_cursor = data['page_info']['end_cursor']
             while loop:
                 try:
-                    code = self.query_media_after(content=name, hashtag=name, end_cursor=end_cursor, qry_type='ig_hashtag', per=per)
+                    code = self.query_media_after(hashtag=name, end_cursor=end_cursor, qry_type='ig_hashtag', per=per)
                     if code:
                         times += 1
                         temp_data = json.loads(code.read().decode('utf-8'))
@@ -313,15 +285,16 @@ class Instagram:
                         if times >= page > 0:
                             loop = False
                         if stop_id:
-                            for temp in temp_data['media']['nodes']:
-                                if temp['id'] == stop_id:
+                            for temp in temp_data['data']['hashtag']['edge_hashtag_to_media']['edges']:
+                                if temp['node']['id'] == stop_id:
                                     loop = False
-                        if temp_data['media']['page_info']['end_cursor'] == end_cursor or temp_data['media']['page_info']['has_next_page'] is False:
+                        if temp_data['data']['hashtag']['edge_hashtag_to_media']['page_info']['end_cursor'] == end_cursor or temp_data['data']['hashtag']['edge_hashtag_to_media']['page_info']['has_next_page'] is False:
                             loop = False
                         else:
-                            end_cursor = temp_data['media']['page_info']['end_cursor']
-                        data['nodes'] += temp_data['media']['nodes']
-                        data['page_info'] = temp_data['media']['page_info']
+                            end_cursor = temp_data['data']['hashtag']['edge_hashtag_to_media']['page_info']['end_cursor']
+                        for tmp1 in temp_data['data']['hashtag']['edge_hashtag_to_media']['edges']:
+                            data['nodes'].append(tmp1['node'])
+                        data['page_info'] = temp_data['data']['hashtag']['edge_hashtag_to_media']['page_info']
                 except:
                     data['nodes'] = data['nodes']
                     if error_stop:
@@ -330,13 +303,18 @@ class Instagram:
 
     def media(self, code_or_node):
         if type(code_or_node) is dict:
-            code = code_or_node['code']
+            # input is node
+            if 'code' in code_or_node.keys():
+                code = code_or_node['code']
+            elif 'shortcode' in code_or_node.keys():
+                code = code_or_node['shortcode']
         elif type(code_or_node) is str:
+            # input is code
             code = code_or_node
         url = 'https://www.instagram.com/p/'+code+'/?__a=1'
         temp = HTTPMethod(url=url, headers=self.default_headers, cookie=self.cookie).get()
         temp_data = json.loads(temp.read().decode('utf-8'))
-        return temp_data['media']
+        return temp_data
 
     def follower(self, username, per=10, page=0, set_end_cursor='', stop_id=''):
         data = self.read_user_init(username=username)
@@ -395,5 +373,4 @@ class Instagram:
                 except:
                     loop = False
             return following_list
-
 
