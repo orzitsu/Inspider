@@ -85,7 +85,7 @@ class Instagram:
     def analyze_html(self, html):
         soup = bs4.BeautifulSoup(html, "html.parser")
         temp = soup.find_all('script', {'type': 'text/javascript'})
-        entry_data = temp[-3].text.replace('window._sharedData = ', '')
+        entry_data = temp[-4].text.replace('window._sharedData = ', '')
         entry_data = entry_data.rstrip(';')
         data = json.loads(entry_data)
         return data
