@@ -1,7 +1,6 @@
 # -*- coding: utf-8 -*-
 __author__ = 'Orzitsu Loong'
 
-import bs4
 import json
 import socket
 import urllib.parse
@@ -65,9 +64,9 @@ class Instagram:
     # 读取用户名的主页
     def read_homepage_from(self, username='', hashtag='', headers={}):
         if username:
-            url = 'https://www.instagram.com/'+username+'/'
+            url = 'https://www.instagram.com/'+username+'/?__a=1'
         elif hashtag:
-            url = 'https://www.instagram.com/explore/tags/'+hashtag+'/'
+            url = 'https://www.instagram.com/explore/tags/'+hashtag+'/?__a=1'
         if not headers:
             headers = self.default_headers
         attemps = 0
@@ -81,52 +80,44 @@ class Instagram:
                 attemps += 1
                 print('read_homepage_from: '+username+' '+hashtag+' error occurred. retry(%d)' %attemps)
 
-    # 从主页中读取JS数据
+    # 读取JS数据
     def analyze_html(self, html):
-        soup = bs4.BeautifulSoup(html, "html.parser")
-        temp = soup.find_all('script', {'type': 'text/javascript'})
-        entry_data = temp[-4].text.replace('window._sharedData = ', '')
-        entry_data = entry_data.rstrip(';')
-        data = json.loads(entry_data)
+        data = json.loads(html.read().decode('UTF-8'))
         return data
 
-    # 设置COOKIE
+    # 设置COOKIE / CSRF
     def set_cookie_from_html(self, html):
         for a, b in html.info().items():
             if a == 'Set-Cookie':
                 c = b.split(';')[0].split('=')
                 self.cookie[c[0]] = c[1]
-
-    # 读取CSRF TOKEN
-    def analyze_csrf_token_from_data(self, data):
-        self.csrf = data['config']['csrf_token']
+                if c[0] == 'csrftoken':
+                    self.csrf = c[1]
 
     # 读取用户的初始化
     def read_user_init(self, username):
         html = self.read_homepage_from(username=username)
         self.set_cookie_from_html(html=html)
         data = self.analyze_html(html=html)
-        self.analyze_csrf_token_from_data(data=data)
-        temp = data['entry_data']['ProfilePage'][0]['user']
+        temp = data['user']
         user = {}
         for a, b in temp.items():
             if a != 'media':
                 user[a] = b
-        nodes = data['entry_data']['ProfilePage'][0]['user']['media']['nodes']
-        count = data['entry_data']['ProfilePage'][0]['user']['media']['count']
-        page_info = data['entry_data']['ProfilePage'][0]['user']['media']['page_info']
+        nodes = data['user']['media']['nodes']
+        count = data['user']['media']['count']
+        page_info = data['user']['media']['page_info']
         return dict(user=user, nodes=nodes, count=count, page_info=page_info)
 
     def read_hashtag_init(self, name):
         html = self.read_homepage_from(hashtag=name)
         self.set_cookie_from_html(html=html)
         data = self.analyze_html(html=html)
-        self.analyze_csrf_token_from_data(data=data)
-        count = data['entry_data']['TagPage'][0]['tag']['media']['count']
-        nodes = data['entry_data']['TagPage'][0]['tag']['media']['nodes']
-        page_info = data['entry_data']['TagPage'][0]['tag']['media']['page_info']
-        top_posts = data['entry_data']['TagPage'][0]['tag']['top_posts']['nodes']
-        content_advisory = data['entry_data']['TagPage'][0]['tag']['content_advisory']
+        count = data['graphql']['hashtag']['edge_hashtag_to_media']['count']
+        nodes = data['graphql']['hashtag']['edge_hashtag_to_media']['edges']
+        page_info = data['graphql']['hashtag']['edge_hashtag_to_media']['page_info']
+        top_posts = data['graphql']['hashtag']['edge_hashtag_to_top_posts']['edges']
+        content_advisory = data['graphql']['hashtag']['edge_hashtag_to_content_advisory']
         return dict(nodes=nodes, count=count, page_info=page_info, top_posts=top_posts, content_advisory=content_advisory)
 
     def login_init(self):
@@ -137,65 +128,45 @@ class Instagram:
             self.set_cookie_from_html(html=html)
             self.csrf = self.cookie['csrftoken']
 
-    def query_media_after(self, end_cursor, username='', user_id='', hashtag='', qry_type='ig_user', per=12):
-        query_header = self.default_headers
-        query_header['X-CSRFToken'] = self.csrf
-        query_header['X-Instagram-AJAX'] = '1'
-        query_header['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8'
-        query_header['X-Requested-With'] = 'XMLHttpRequest'
-        if qry_type == 'ig_user':
-            query_header['Referer'] = 'https://www.instagram.com/' + username
-            query_id = '17862015703145017'
-            variables = '{"id":"'+user_id+'","first":'+str(per)+',"after":"'+end_cursor+'"}'
-
-        elif qry_type == 'ig_hashtag':
-            url = 'https://www.instagram.com/explore/tags/'+hashtag+'/'
-            query_header['Referer'] = urllib.parse.quote(url, safe=';/?:@&=+$,')
-            query_id = '17875800862117404'
-            variables = '{"tag_name":"'+hashtag+'","first":'+str(per)+',"after":"'+end_cursor+'"}'
-        data = dict(variables=variables, query_id=query_id)
-        print(data)
-        attemps = 0
-        success = False
-        while attemps < 3 and not success:
-            try:
-                temp = HTTPMethod('https://www.instagram.com/graphql/query/', headers=query_header, cookie=self.cookie, data=data)
-                code = temp.get()
-                return code
-            except:
-                attemps += 1
-                print('query_media_after: ' + end_cursor + ' error occurred. retry(%d)' % attemps)
-
-    def query_follow(self, username, user_id, query_type='followers', per=10, set_end_cursor='', error_stop=True):
+    def graphql_query(self, query_type, username='', user_id='', hashtag='', per=12, end_cursor=''):
         headers = self.default_headers
         headers['X-CSRFToken'] = self.csrf
         headers['X-Instagram-AJAX'] = '1'
         headers['Content-Type'] = 'application/x-www-form-urlencoded; charset=UTF-8'
         headers['X-Requested-With'] = 'XMLHttpRequest'
-        headers['Referer'] = 'https://www.instagram.com/'+username+'/'
-        if query_type == 'followers':
-            query_id = '17851374694183129'
-        elif query_type == 'following':
-            query_id = '17874545323001329'
-        if set_end_cursor:
-            variables = '{"id":"'+user_id+'","first":'+str(per)+',"after":"'+set_end_cursor+'"}'
-        else:
-            variables = '{"id":"'+user_id+'","first":'+str(per)+'}'
-        data = dict(variables=variables, query_id=query_id)
+        if query_type == 'ig_user':
+            headers['Referer'] = 'https://www.instagram.com/' + username
+            query_hash = '472f257a40c653c64c666ce877d59d2b'
+            variables = '{"id":"'+user_id+'","first":'+str(per)+',"after":"'+end_cursor+'"}'
+        elif query_type == 'ig_hashtag':
+            url = 'https://www.instagram.com/explore/tags/'+hashtag+'/'
+            headers['Referer'] = urllib.parse.quote(url, safe=';/?:@&=+$,')
+            query_hash = '298b92c8d7cad703f7565aa892ede943'
+            variables = '{"tag_name":"'+hashtag+'","first":'+str(per)+',"after":"'+end_cursor+'"}'
+        elif query_type == 'followers' or 'following':
+            headers['Referer'] = 'https://www.instagram.com/' + username + '/'
+            if query_type == 'followers':
+                query_hash = '37479f2b8209594dde7facb0d904896a'
+            elif query_type == 'following':
+                query_hash = '58712303d941c6855d4e888c5f0cd22f'
+            if end_cursor:
+                variables = '{"id":"'+user_id+'","first":'+str(per)+',"after":"'+end_cursor+'"}'
+            else:
+                variables = '{"id":"'+user_id+'","first":'+str(per)+'}'
         attemps = 0
         success = False
         while attemps < 3 and not success:
             try:
-                temp = HTTPMethod('https://www.instagram.com/graphql/query/', headers=headers, cookie=self.cookie, data=data).get()
+                temp = HTTPMethod(
+                    'https://www.instagram.com/graphql/query/?query_hash=' + query_hash + '&variables=' + variables,
+                    headers=headers, cookie=self.cookie).get()
                 temp_data = json.loads(temp.read().decode('utf-8'))
-                if query_type == 'followers':
-                    return temp_data['data']['user']['edge_followed_by']
-                elif query_type == 'following':
-                    return temp_data['data']['user']['edge_follow']
+                temp.close()
+                return temp_data
             except:
                 attemps += 1
-                print('query_follow: ' + username + ' error occurred. retry(%d)' % attemps)
-        return False
+                print('query: ' + query_type + end_cursor + ' error occurred. retry(%d)' % attemps)
+                return False
 
     # context:   blended(default)/user/hashtag/place
     def search(self, keyword, context='blended'):
@@ -243,22 +214,20 @@ class Instagram:
                 end_cursor = data['page_info']['end_cursor']
             while loop:
                 try:
-                    code = self.query_media_after(user_id=data['user']['id'], username=username, end_cursor=end_cursor, per=per)
+                    code = self.graphql_query(query_type='ig_user', user_id=data['user']['id'], username=username, end_cursor=end_cursor, per=per)
                     if code:
                         times += 1
-                        temp_data = json.loads(code.read().decode('utf-8'))
-                        code.close()
                         if times >= page > 0:
                             loop = False
                         if stop_id:
-                            for temp in temp_data['data']['user']['edge_owner_to_timeline_media']['edges']:
+                            for temp in code['data']['user']['edge_owner_to_timeline_media']['edges']:
                                 if temp['node']['id'] == stop_id:
                                     loop = False
-                        if temp_data['data']['user']['edge_owner_to_timeline_media']['page_info']['end_cursor'] == end_cursor or temp_data['data']['user']['edge_owner_to_timeline_media']['page_info']['has_next_page'] is False:
+                        if code['data']['user']['edge_owner_to_timeline_media']['page_info']['end_cursor'] == end_cursor or code['data']['user']['edge_owner_to_timeline_media']['page_info']['has_next_page'] is False:
                             loop = False
                         else:
-                            end_cursor = temp_data['data']['user']['edge_owner_to_timeline_media']['page_info']['end_cursor']
-                        for tmp1 in temp_data['data']['user']['edge_owner_to_timeline_media']['edges']:
+                            end_cursor = code['data']['user']['edge_owner_to_timeline_media']['page_info']['end_cursor']
+                        for tmp1 in code['data']['user']['edge_owner_to_timeline_media']['edges']:
                             data['nodes'].append(tmp1['node'])
                 except:
                     data['nodes'] = data['nodes']
@@ -277,24 +246,22 @@ class Instagram:
                 end_cursor = data['page_info']['end_cursor']
             while loop:
                 try:
-                    code = self.query_media_after(hashtag=name, end_cursor=end_cursor, qry_type='ig_hashtag', per=per)
+                    code = self.graphql_query(query_type='ig_hashtag', hashtag=name, end_cursor=end_cursor, per=per)
                     if code:
                         times += 1
-                        temp_data = json.loads(code.read().decode('utf-8'))
-                        code.close()
                         if times >= page > 0:
                             loop = False
                         if stop_id:
-                            for temp in temp_data['data']['hashtag']['edge_hashtag_to_media']['edges']:
+                            for temp in code['data']['hashtag']['edge_hashtag_to_media']['edges']:
                                 if temp['node']['id'] == stop_id:
                                     loop = False
-                        if temp_data['data']['hashtag']['edge_hashtag_to_media']['page_info']['end_cursor'] == end_cursor or temp_data['data']['hashtag']['edge_hashtag_to_media']['page_info']['has_next_page'] is False:
+                        if code['data']['hashtag']['edge_hashtag_to_media']['page_info']['end_cursor'] == end_cursor or code['data']['hashtag']['edge_hashtag_to_media']['page_info']['has_next_page'] is False:
                             loop = False
                         else:
-                            end_cursor = temp_data['data']['hashtag']['edge_hashtag_to_media']['page_info']['end_cursor']
-                        for tmp1 in temp_data['data']['hashtag']['edge_hashtag_to_media']['edges']:
+                            end_cursor = code['data']['hashtag']['edge_hashtag_to_media']['page_info']['end_cursor']
+                        for tmp1 in code['data']['hashtag']['edge_hashtag_to_media']['edges']:
                             data['nodes'].append(tmp1['node'])
-                        data['page_info'] = temp_data['data']['hashtag']['edge_hashtag_to_media']['page_info']
+                        data['page_info'] = code['data']['hashtag']['edge_hashtag_to_media']['page_info']
                 except:
                     data['nodes'] = data['nodes']
                     if error_stop:
@@ -325,8 +292,9 @@ class Instagram:
             follower_list = []
             while loop:
                 try:
-                    temp_data = self.query_follow(username, user_id, 'followers', per=per, set_end_cursor=set_end_cursor)
+                    temp_data = self.graphql_query(query_type='followers', username=username, user_id=user_id, per=per, end_cursor=set_end_cursor)
                     if temp_data:
+                        temp_data = temp_data['data']['user']['edge_followed_by']
                         times += 1
                         if times >= page > 0:
                             loop = False
@@ -354,8 +322,9 @@ class Instagram:
             following_list = []
             while loop:
                 try:
-                    temp_data = self.query_follow(username, user_id, 'following', per=per, set_end_cursor=set_end_cursor)
+                    temp_data = self.graphql_query(query_type='following', username=username, user_id=user_id, per=per, end_cursor=set_end_cursor)
                     if temp_data:
+                        temp_data = temp_data['data']['user']['edge_follow']
                         times += 1
                         if times >= page > 0:
                             loop = False
@@ -373,4 +342,3 @@ class Instagram:
                 except:
                     loop = False
             return following_list
-
