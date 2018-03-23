@@ -4,7 +4,7 @@ A Web Spider/Crawler for Instagram written in Python.
 ## Changelog
 #### [1.0.1] - 2017-07-10
 - Update Inspider.py to fit the new Instagram API.
-#### [1.0.2] - 2017-03-03
+#### [1.0.2] - 2018-03-03
 - Adapt Inspider.py to new API parameters.
 - Beautiful Soup 4 is no longer needed.
 
